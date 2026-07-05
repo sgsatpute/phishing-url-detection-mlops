@@ -92,7 +92,7 @@ async def predict_route(request: Request, file: Annotated[UploadFile, File()] = 
         table_html = df.to_html(classes="table table-striped")
         # print(table_html)
         return templates.TemplateResponse(
-            "table.html", {"request": request, "table": table_html},
+            request, "table.html", {"table": table_html},
         )
 
     except Exception as e:
