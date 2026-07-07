@@ -30,8 +30,8 @@ from network_security.utils.ml_utils.metric.classification_metric import (
 from network_security.utils.ml_utils.model.estimator import NetworkModel
 
 dagshub.init(
-    repo_owner="https://github.com/sgsatpute/phishing-url-detection-mlops.git",
-    repo_name="Network-Security-System-MLOps-Project",
+    repo_owner="sgsatpute",
+    repo_name="phishing-url-detection-mlops",
     mlflow=True,
 )
 

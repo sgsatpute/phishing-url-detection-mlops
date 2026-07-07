@@ -70,4 +70,4 @@ MODEL_TRAINER_OVER_FIITING_UNDER_FITTING_THRESHOLD: float = 0.05
 
 ## The bucket name should be unique globally and cannot be changed
 ## Make a s3 bucket and change it below.
-TRAINING_BUCKET_NAME = "demo-networksecurity"
+TRAINING_BUCKET_NAME = "phishing-mlops-sgsatpute"
