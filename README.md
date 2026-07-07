@@ -1,6 +1,6 @@
 # Phishing URL Detection — End-to-End MLOps Pipeline
 
-An automated machine learning system that classifies URLs as **phishing** or **legitimate**. This project covers the complete ML lifecycle — data ingestion from MongoDB, validation with drift detection, transformation, model training with experiment tracking, and a live REST API — fully containerized and deployed to both AWS EC2 and Render.
+An automated machine learning system that classifies URLs as **phishing** or **legitimate**. This project covers the complete ML lifecycle — data ingestion from MongoDB, validation with statistical drift detection, transformation, model training with experiment tracking, and a live REST API — fully containerized and deployed to both AWS EC2 and Render.
 
 **🔗 Live demo:** https://phishing-url-detection-mlops.onrender.com/docs
 
@@ -25,7 +25,11 @@ An automated machine learning system that classifies URLs as **phishing** or **l
 
 This project builds a maintainable, production-style pipeline for detecting malicious/phishing websites from their URL characteristics. Rather than a one-off notebook, it's structured as independent, reusable pipeline components — ingestion, validation, transformation, and training — with experiment tracking, schema validation, and statistical drift detection built in throughout.
 
-The trained model is served through a FastAPI application supporting both on-demand retraining (`/train`) and real-time inference (`/predict`), containerized with Docker, and deployed to two separate cloud environments.
+The trained model is served through a FastAPI application supporting both on-demand retraining (`/train`) and real-time inference (`/predict`), containerized with Docker, and deployed to two separate cloud environments — one set up manually through the full AWS stack (IAM, S3, ECR, EC2), and one through Render's automated GitHub-integrated deployment.
+
+**Overall Architecture**
+
+![Project Architecture](images/architecture.jpg)
 
 ---
 
@@ -34,20 +38,20 @@ The trained model is served through a FastAPI application supporting both on-dem
 | Environment | URL | Notes |
 | :--- | :--- | :--- |
 | **Render** (primary) | https://phishing-url-detection-mlops.onrender.com/docs | Stable, always-available URL. Free tier spins down after inactivity — first request may take 30–60s to wake up. |
-| **AWS EC2** | Manually deployed via Docker on a `t3.micro` instance | Demonstrates a full manual cloud deployment: IAM → S3 → ECR → EC2. |
+| **AWS EC2** | Deployed manually via Docker on a `t3.micro` instance | Demonstrates a full manual cloud deployment: IAM → S3 → ECR → EC2 → Docker. |
 
-Try the `/predict` endpoint by uploading `valid_data/test.csv` — it returns an HTML table with a `predicted_column` (`1.0` = legitimate, `0.0` = phishing) for each row.
+Try the `/predict` endpoint directly by uploading `valid_data/test.csv` — it returns an HTML table with a `predicted_column` for each row (`1.0` = legitimate, `0.0` = phishing).
 
 ---
 
 ## <a id="features"></a>Features
 
-- **Component-based pipeline** — ingestion, validation, transformation, and training are separated into independent, testable modules
-- **Data drift detection** — schema validation plus a Kolmogorov–Smirnov statistical test to catch distribution shifts between train/test splits
-- **Experiment tracking** — every training run (hyperparameters, F1/precision/recall) is logged to MLflow via DagsHub
-- **Automated artifact sync** — trained models, preprocessors, and validation reports are pushed to AWS S3 after every run
-- **REST API** — FastAPI service with `/train` (retrain on demand) and `/predict` (real-time inference) endpoints
-- **Dual cloud deployment** — containerized with Docker, deployed manually to AWS EC2 via ECR, and automatically to Render via GitHub integration
+- **Component-based pipeline** — ingestion, validation, transformation, and training are separated into independent, testable modules that plug into a single orchestrated pipeline.
+- **Data drift detection** — schema validation plus a Kolmogorov–Smirnov statistical test to catch distribution shifts between train/test splits, catching silent data quality issues before they reach the model.
+- **Experiment tracking** — every training run (hyperparameters, F1/precision/recall) is logged to MLflow via DagsHub, giving a full history of experiments rather than just the final model.
+- **Automated artifact sync** — trained models, preprocessors, and validation reports are pushed to AWS S3 after every run, decoupling artifact storage from the compute that produced them.
+- **REST API** — FastAPI service with `/train` (retrain on demand) and `/predict` (real-time inference) endpoints, plus interactive Swagger docs out of the box.
+- **Dual cloud deployment** — containerized with Docker, deployed manually to AWS EC2 via ECR (full infrastructure ownership), and automatically to Render via GitHub integration (CI/CD-style, redeploys on every push).
 
 ---
 
@@ -70,6 +74,8 @@ Try the `/predict` endpoint by uploading `valid_data/test.csv` — it returns an
 
 The model is trained on **11,055 URL records**, each described by 30 lexical, domain-based, and page-level features that together signal whether a URL is likely to be malicious.
 
+![URL Features](images/url_features.jpg)
+
 **A few of the key features:**
 
 | Feature | What it captures |
@@ -82,22 +88,39 @@ The model is trained on **11,055 URL records**, each described by 30 lexical, do
 | `Domain_registeration_length` | How long the domain has been registered |
 | `web_traffic` | Site traffic rank as a proxy for legitimacy |
 | `age_of_domain` | How long the domain has existed |
+| `Google_Index` | Whether the page is indexed by Google (legitimate sites usually are) |
 
 ---
 
 ## <a id="pipeline"></a>Pipeline Architecture
 
-**1. Data Ingestion** — pulls raw records from MongoDB Atlas, splits into train/test sets, stores as artifacts.
+![Pipeline Workflow Overview](images/pipeline_workflow_diagram.png)
 
-**2. Data Validation** — validates incoming data against `data_schema/schema.yaml` (column count, types) and runs a Kolmogorov–Smirnov drift check between train and test distributions.
+### 1. Data Ingestion
+Pulls raw records from MongoDB Atlas, splits them into train/test sets, and stores the result as versioned artifacts for the next stage.
 
-**3. Data Transformation** — imputes missing values with a `KNNImputer`, applies a preprocessing pipeline, saves outputs as NumPy arrays.
+![Data Ingestion Flow](images/data_ingestion_flow.png)
 
-**4. Model Training** — trains multiple candidate models via `GridSearchCV`, logs every run to MLflow (tracked on DagsHub), and persists the best-performing model and preprocessor.
+### 2. Data Validation
+Validates incoming data against `data_schema/schema.yaml` (column count, data types) and runs a Kolmogorov–Smirnov test to detect statistical drift between the train and test distributions — catching cases where new data no longer resembles what the model was trained on.
 
-**5. Artifact Sync** — datasets, validation reports, and trained artifacts are synced to an S3 bucket after every pipeline run.
+![Data Validation Flow](images/data_validation_flow.png)
 
-**6. Serving** — the best model is loaded by a FastAPI app and exposed via `/predict` for real-time inference.
+### 3. Data Transformation
+Missing values are imputed using a `KNNImputer`, features are passed through a preprocessing pipeline, and the resulting arrays are saved as NumPy files ready for efficient model training.
+
+![Data Transformation Flow](images/data_transformation_flow.png)
+
+### 4. Model Training
+Multiple candidate classification models are trained using `GridSearchCV` for hyperparameter tuning. Every run — parameters, F1, precision, recall — is logged to MLflow (tracked live on DagsHub), and the best-performing model and preprocessor are persisted.
+
+![Model Training Flow](images/model_training_flow.png)
+
+### 5. Artifact Sync
+All pipeline artifacts — datasets, validation reports, trained models, and preprocessors — are automatically synced to an AWS S3 bucket after every run, for persistence and reproducibility independent of any single machine.
+
+### 6. Serving
+The best model is loaded by a FastAPI application and exposed through a `/predict` endpoint for real-time inference, and a `/train` endpoint to trigger retraining on demand.
 
 ---
 
@@ -111,24 +134,25 @@ Metrics from the most recent training run (tracked live on [DagsHub/MLflow](http
 | Precision | 0.990 | 0.970 |
 | Recall | 0.993 | 0.980 |
 
-The small train/test gap indicates the model generalizes well without significant overfitting.
+The small gap between train and test metrics indicates the model generalizes well without significant overfitting.
 
 ---
 
 ## <a id="deployment"></a>Deployment
 
-The application is containerized with Docker (`python:3.11-slim-bookworm` base image) and deployed two ways:
+The application is containerized with Docker (`python:3.11-slim-bookworm` base image) and deployed in two independent ways, deliberately chosen to demonstrate two different deployment models:
 
-**AWS (manual, full-stack cloud deployment):**
-1. Docker image built locally and pushed to **AWS ECR**
-2. An **EC2** (`t3.micro`, free-tier) instance pulls the image from ECR and runs it via Docker
-3. Security group opens port 8080 for public API access
-4. Trained artifacts sync to an **S3** bucket after each training run
+### AWS — manual, full-stack cloud deployment
+1. Docker image built locally and pushed to a private **AWS ECR** repository
+2. An **EC2** (`t3.micro`, free-tier eligible) instance pulls the image from ECR and runs it via Docker
+3. A security group opens port 8080 so the API is publicly reachable
+4. An **IAM** user with scoped permissions (S3, ECR, EC2 only) handles all programmatic access
+5. Trained artifacts sync automatically to an **S3** bucket after each training run
 
-**Render (automated, GitHub-integrated):**
+### Render — automated, GitHub-integrated deployment
 1. Connected directly to this GitHub repository
 2. Builds the same `Dockerfile` automatically on every push to `main`
-3. Provides a stable, permanent public URL without manual server management
+3. Provides a stable, permanent public URL without any manual server management — closer to how a modern CI/CD pipeline would deploy this in production
 
 ---
 
@@ -139,6 +163,7 @@ The application is containerized with Docker (`python:3.11-slim-bookworm` base i
 - A MongoDB cluster (e.g. free-tier Atlas)
 - Docker (for containerized runs)
 - AWS credentials (only needed for S3 artifact sync / EC2 deployment)
+- A DagsHub account (for MLflow experiment tracking)
 
 ### 1. Clone the repository
 ```bash
@@ -177,7 +202,7 @@ python test.py
 ```bash
 uvicorn app:app --host 0.0.0.0 --port 8080
 ```
-Interactive docs at `http://localhost:8080/docs`.
+Interactive docs available at `http://localhost:8080/docs`.
 
 ### 6. Run with Docker
 ```bash
@@ -204,6 +229,7 @@ docker run -d -p 8080:8080 --env-file .env --name phishing-app phishing-mlops-re
 ├── data_schema/schema.yaml       # Schema used for data validation
 ├── final_model/                  # Latest trained model + preprocessor
 ├── templates/                    # Jinja2 templates for prediction output
+├── valid_data/                   # Sample data for testing /predict
 ├── app.py                        # FastAPI entry point
 ├── push_data.py                  # MongoDB data loader
 ├── test.py                       # Standalone training script
@@ -215,15 +241,15 @@ docker run -d -p 8080:8080 --env-file .env --name phishing-app phishing-mlops-re
 
 ## <a id="challenges"></a>Engineering Challenges Solved
 
-Building and deploying this pipeline surfaced several real-world issues that had to be diagnosed and fixed:
+Building and deploying this pipeline surfaced a number of real-world issues that had to be diagnosed and fixed — the kind of debugging work that doesn't show up in a tutorial, but does in production:
 
-- **Starlette API breaking change** — `TemplateResponse`'s argument order changed in newer versions, causing an `unhashable type: dict` error at runtime; fixed by updating the call signature.
-- **Silent exception masking** — two `raise NetworkSecurityException` calls were missing required arguments, hiding the real underlying errors during debugging; fixed to properly propagate exception details.
-- **MongoDB TLS handshake failures** — intermittent `SSL: TLSV1_ALERT_INTERNAL_ERROR` failures traced back to third-party antivirus software performing HTTPS inspection and interfering with TLS negotiation at the OS level (confirmed via `curl` failing identically outside of Python).
-- **Debian package repository deprecation** — the original `python:3.10-slim-buster` base image referenced an end-of-life Debian release with dead package mirrors; migrated to `python:3.11-slim-bookworm`.
-- **Python version incompatibility** — `datetime.UTC` (used in custom logging) requires Python 3.11+; the original Docker base image used 3.10, causing an `ImportError` only inside the container.
-- **Headless OAuth failure** — DagsHub's default `dagshub.init()` triggers an interactive browser-based OAuth flow, which fails in a non-interactive server environment; resolved by authenticating via a `DAGSHUB_USER_TOKEN` environment variable instead.
-- **ECR authentication expiry** — Docker's login token for AWS ECR expires periodically, requiring re-authentication (`aws ecr get-login-password`) before pushing or pulling images.
+- **Starlette API breaking change** — `TemplateResponse`'s argument order changed in newer Starlette versions (`request` moved to the first positional argument), which surfaced as a confusing `unhashable type: dict` error at runtime. Fixed by updating the call signature to match the new API.
+- **Silent exception masking** — two `raise NetworkSecurityException` calls in the data ingestion component were missing their required arguments entirely, which meant every real error underneath them was hidden behind a generic `TypeError`. Fixed to properly propagate the original exception and traceback.
+- **MongoDB TLS handshake failures** — intermittent `SSL: TLSV1_ALERT_INTERNAL_ERROR` failures during data ingestion were eventually traced back to third-party antivirus software performing HTTPS/TLS inspection at the OS level — confirmed by reproducing the identical failure with `curl` completely outside of Python, ruling out the application code.
+- **Debian package repository deprecation** — the original `python:3.10-slim-buster` Docker base image pointed at an end-of-life Debian release whose package mirrors had been taken offline, causing `apt update` to fail with 404s. Migrated to `python:3.11-slim-bookworm`.
+- **Python version incompatibility inside the container** — `datetime.UTC` (used in custom logging) requires Python 3.11+; the original Docker base image used Python 3.10, causing an `ImportError` that only appeared inside the container, not in local development.
+- **Headless OAuth failure in production** — DagsHub's default `dagshub.init()` call triggers an interactive, browser-based OAuth flow, which hangs indefinitely in a non-interactive server environment like EC2 or Render. Resolved by authenticating via a `DAGSHUB_USER_TOKEN` environment variable instead.
+- **ECR authentication expiry** — Docker's login token for AWS ECR expires periodically, requiring re-authentication (`aws ecr get-login-password`) before each push or pull — easy to miss when returning to a deployment after a break.
 
 ---
 
