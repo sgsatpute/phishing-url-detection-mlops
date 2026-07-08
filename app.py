@@ -31,8 +31,19 @@ ca = certifi.where()
 
 
 load_dotenv()
-username = quote_plus(os.getenv("MONGO_DB_USERNAME"))
-password = quote_plus(os.getenv("MONGO_DB_PASSWORD"))
+_raw_username = os.getenv("MONGO_DB_USERNAME")
+_raw_password = os.getenv("MONGO_DB_PASSWORD")
+if not _raw_username or not _raw_password:
+    # Without this check, quote_plus(None) raises a bare
+    # "TypeError: quote_from_bytes() expected bytes" at import time — before
+    # FastAPI even starts — which gives no hint that the real problem is a
+    # missing .env file / unset MONGO_DB_USERNAME or MONGO_DB_PASSWORD.
+    raise RuntimeError(
+        "MONGO_DB_USERNAME and MONGO_DB_PASSWORD must be set (e.g. in a .env "
+        "file) before starting the app.",
+    )
+username = quote_plus(_raw_username)
+password = quote_plus(_raw_password)
 
 mongo_db_url: str = f"mongodb+srv://{username}:{password}@cluster0.lbvk3s8.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 

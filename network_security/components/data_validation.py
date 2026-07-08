@@ -148,8 +148,16 @@ class DataValidation:
 
             data_validation_artifact = DataValidationArtifact(
                 validation_status=status,
-                valid_train_file_path=self.data_ingestion_artifact.trained_file_path,
-                valid_test_file_path=self.data_ingestion_artifact.test_file_path,
+                # These must point at the files this method just wrote to
+                # (data_validation_config.valid_*_file_path), not back at the
+                # raw ingestion output. Downstream (DataTransformation) reads
+                # from these paths, so pointing at the un-validated ingestion
+                # files meant the "valid" data dir was written but never
+                # actually used — a latent bug that happens to be invisible
+                # today only because this component doesn't yet drop any
+                # rows/columns.
+                valid_train_file_path=self.data_validation_config.valid_train_file_path,
+                valid_test_file_path=self.data_validation_config.valid_test_file_path,
                 invalid_train_file_path=None,
                 invalid_test_file_path=None,
                 drift_report_file_path=self.data_validation_config.drift_report_file_path,

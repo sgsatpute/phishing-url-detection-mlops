@@ -15,6 +15,12 @@ load_dotenv()
 username = os.getenv("MONGO_DB_USERNAME")
 password = os.getenv("MONGO_DB_PASSWORD")
 
+if not username or not password:
+    raise RuntimeError(
+        "MONGO_DB_USERNAME and MONGO_DB_PASSWORD must be set (e.g. in a .env "
+        "file) before running push_data.py.",
+    )
+
 username = quote_plus(username)
 password = quote_plus(password)
 
@@ -46,7 +52,7 @@ class NetworkSecurityExtract:
             self.collection = collection
             self.records = records
 
-            self.mongo_client = pymongo.MongoClient(MONGO_DB_URL)
+            self.mongo_client = pymongo.MongoClient(MONGO_DB_URL, tlsCAFile=ca)
             self.database = self.mongo_client[self.database]
 
             self.collection = self.database[self.collection]

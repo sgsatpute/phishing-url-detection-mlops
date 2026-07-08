@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -29,11 +30,25 @@ from network_security.utils.ml_utils.metric.classification_metric import (
 )
 from network_security.utils.ml_utils.model.estimator import NetworkModel
 
-dagshub.init(
-    repo_owner="sgsatpute",
-    repo_name="phishing-url-detection-mlops",
-    mlflow=True,
-)
+_MLFLOW_TRACKING_ENABLED = False
+if os.getenv("DAGSHUB_USER_TOKEN"):
+    try:
+        dagshub.init(
+            repo_owner=os.getenv("DAGSHUB_REPO_OWNER", "sgsatpute"),
+            repo_name=os.getenv("DAGSHUB_REPO_NAME", "phishing-url-detection-mlops"),
+            mlflow=True,
+        )
+        _MLFLOW_TRACKING_ENABLED = True
+    except Exception as e:
+        logging.warning(
+            f"DagsHub/MLflow init failed ({e}); continuing without experiment tracking. "
+            "Check DAGSHUB_USER_TOKEN / DAGSHUB_REPO_OWNER / DAGSHUB_REPO_NAME are correct.",
+        )
+else:
+    logging.warning(
+        "DAGSHUB_USER_TOKEN not set; skipping DagsHub/MLflow experiment tracking "
+        "(training will still run normally).",
+    )
 
 
 class ModelTrainer:
@@ -66,11 +81,16 @@ class ModelTrainer:
         X_test: object,
         y_test: object,
     ) -> ModelTrainerArtifact:
+        # verbose=1 on each estimator spams the log with per-iteration
+        # boosting/convergence output on every GridSearchCV fit — harmless
+        # locally, but noisy and unhelpful in server logs during a background
+        # /train run. Left at the default (silent) here; GridSearchCV's own
+        # progress can be tracked via verbose= if ever needed for debugging.
         models = {
-            "Random Forest": RandomForestClassifier(verbose=1),
+            "Random Forest": RandomForestClassifier(),
             "Decision Tree": DecisionTreeClassifier(),
-            "Gradient Boosting": GradientBoostingClassifier(verbose=1),
-            "Logistic Regression": LogisticRegression(verbose=1),
+            "Gradient Boosting": GradientBoostingClassifier(),
+            "Logistic Regression": LogisticRegression(),
             "AdaBoost": AdaBoostClassifier(),
         }
         params = {

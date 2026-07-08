@@ -22,6 +22,14 @@ load_dotenv()
 username = os.getenv("MONGO_DB_USERNAME")
 password = os.getenv("MONGO_DB_PASSWORD")
 
+if not username or not password:
+    # Same failure mode as app.py: quote_plus(None) raises a cryptic
+    # TypeError with no hint that the real cause is a missing .env file.
+    raise RuntimeError(
+        "MONGO_DB_USERNAME and MONGO_DB_PASSWORD must be set (e.g. in a .env "
+        "file) before running data ingestion.",
+    )
+
 username = quote_plus(username)
 password = quote_plus(password)
 
@@ -75,7 +83,6 @@ class DataIngestion:
             )
             dir_path = Path(self.data_ingestion_config.training_file_path).parent
 
-            Path(dir_path).mkdir(parents=True, exist_ok=True)
             Path(dir_path).mkdir(parents=True, exist_ok=True)
 
             logging.info("Exporting train and test file path.")

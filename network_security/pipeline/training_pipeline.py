@@ -113,6 +113,11 @@ class TrainingPipeline:
 
     ## Local artifact -----> s3 bucket
     def sync_artifact_dir_to_s3(self) -> None:
+        # S3 sync is a nice-to-have (backup/versioning of run artifacts), not
+        # something the model training itself depends on. A missing AWS CLI
+        # or bad/expired credentials shouldn't turn an otherwise-successful
+        # training run into a reported failure — log and move on instead,
+        # the same soft-fail pattern used for MLflow tracking above.
         try:
             aws_bucket_url = f"s3://{TRAINING_BUCKET_NAME}/artifact/{self.training_pipeline_config.timestamp}"
             self.s3_sync.sync_folder_to_s3(
@@ -120,7 +125,7 @@ class TrainingPipeline:
                 aws_bucket_url=aws_bucket_url,
             )
         except Exception as e:
-            raise NetworkSecurityException(e, sys)
+            logging.warning(f"Syncing artifacts to S3 failed, continuing without it: {e}")
 
     ## Local final model -----> s3 bucket
     def sync_saved_model_dir_to_s3(self) -> None:
@@ -131,7 +136,7 @@ class TrainingPipeline:
                 aws_bucket_url=aws_bucket_url,
             )
         except Exception as e:
-            raise NetworkSecurityException(e, sys)
+            logging.warning(f"Syncing final model to S3 failed, continuing without it: {e}")
 
     def run_pipeline(self) -> ModelTrainerArtifact:
         try:
