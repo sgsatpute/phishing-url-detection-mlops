@@ -67,17 +67,41 @@ app.add_middleware(
 
 templates = Jinja2Templates(directory="./templates")
 
+# Load the model + preprocessor once at startup and cache them in memory,
+# instead of re-reading both pickle files from disk on every /predict call.
+# /train refreshes these in-memory objects after a successful retrain.
+try:
+    _preprocessor = load_object("final_model/preprocessor.pkl")
+    _model = load_object("final_model/model.pkl")
+    network_model: NetworkModel | None = NetworkModel(preprocessor=_preprocessor, model=_model)
+except Exception as e:
+    # Don't crash app startup if no model has been trained yet — /predict
+    # will simply return a clear error until /train has run at least once.
+    logging.warning(f"Could not load model/preprocessor at startup ({e}). Run /train first.")
+    network_model = None
+
 
 @app.get("/", tags=["authentication"])
 async def index() -> RedirectResponse:
     return RedirectResponse(url="/docs")
 
 
+@app.get("/health")
+async def health() -> dict:
+    return {"status": "ok", "model_loaded": network_model is not None}
+
+
 @app.get("/train")
 async def train_route() -> Response:
+    global network_model
     try:
         train_pipeline = TrainingPipeline()
         train_pipeline.run_pipeline()
+        # Refresh the in-memory model so /predict immediately uses the
+        # newly trained artifact without needing an app restart.
+        preprocessor = load_object("final_model/preprocessor.pkl")
+        model = load_object("final_model/model.pkl")
+        network_model = NetworkModel(preprocessor=preprocessor, model=model)
         return Response("Training is successful")
     except Exception as e:
         raise NetworkSecurityException(e, sys)
@@ -86,22 +110,16 @@ async def train_route() -> Response:
 @app.post("/predict")
 async def predict_route(request: Request, file: Annotated[UploadFile, File()] = ...) -> _TemplateResponse:
     try:
+        if network_model is None:
+            raise RuntimeError("No trained model available yet. Call /train first.")
+
         df = pd.read_csv(file.file)
-        # print(df)
-        preprocesor = load_object("final_model/preprocessor.pkl")
-        final_model = load_object("final_model/model.pkl")
-        network_model = NetworkModel(preprocessor=preprocesor, model=final_model)
-        print(df.iloc[0])
         y_pred = network_model.predict(df)
-        print(y_pred)
         df["predicted_column"] = y_pred
-        print(df["predicted_column"])
-        # df['predicted_column'].replace(-1, 0)
-        # return df.to_json()
+
         Path("prediction_output").mkdir(exist_ok=True)
         df.to_csv("prediction_output/output.csv")
         table_html = df.to_html(classes="table table-striped")
-        # print(table_html)
         return templates.TemplateResponse(
             request, "table.html", {"table": table_html},
         )
