@@ -25,7 +25,6 @@ username = quote_plus(username)
 password = quote_plus(password)
 
 MONGO_DB_URL: str = f"mongodb+srv://{username}:{password}@cluster0.lbvk3s8.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
-print(MONGO_DB_URL)
 
 ca = certifi.where()
 
@@ -68,6 +67,5 @@ if __name__ == "__main__":
     Collection = "NetworkData"
     networkobj = NetworkSecurityExtract()
     records = networkobj.csv_to_json_convertor(file_path=FILE_PATH)
-    print(records)
     no_of_records = networkobj.insert_data_mongodb(records, DATABASE, Collection)
-    print(no_of_records)
+    print(f"Inserted {no_of_records} records into {DATABASE}.{Collection}")

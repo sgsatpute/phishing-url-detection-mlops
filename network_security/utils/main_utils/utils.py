@@ -23,7 +23,6 @@ def write_yaml_file(file_path: str, content: object, replace: bool = False) -> N
             Path(file_path).unlink()
         with Path(file_path).open("w") as file:
             yaml.dump(content, file)
-            yaml.dump(content, file)
     except Exception as e:
         raise NetworkSecurityException(e, sys)
 
@@ -59,7 +58,6 @@ def load_object(file_path: str) -> object:
         if not Path(file_path).exists():
             raise Exception(f"The file: {file_path} is not exists")
         with Path(file_path).open("rb") as file_obj:
-            print(file_obj)
             return pickle.load(file_obj)
     except Exception as e:
         raise NetworkSecurityException(e, sys) from e
@@ -76,4 +74,3 @@ def load_numpy_array_data(file_path: str) -> np.array:
             return np.load(file_obj)
     except Exception as e:
         raise NetworkSecurityException(e, sys) from e
-

@@ -96,7 +96,6 @@ class DataValidation:
             dir_path = Path(drift_report_file_path).parent
             dir_path.mkdir(parents=True, exist_ok=True)
             write_yaml_file(file_path=drift_report_file_path, content=report)
-            write_yaml_file(file_path=drift_report_file_path, content=report)
 
         except Exception as e:
             raise NetworkSecurityException(e, sys)
