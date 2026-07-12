@@ -2,12 +2,12 @@ import os
 import sys
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import certifi
 import pandas as pd
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
@@ -25,6 +25,7 @@ from network_security.exception.exception import NetworkSecurityException
 from network_security.logging.logger import logging
 from network_security.pipeline.training_pipeline import TrainingPipeline
 from network_security.utils.main_utils.utils import load_object
+from network_security.utils.ml_utils.feature_extraction import FEATURE_COLUMNS, extract_features
 from network_security.utils.ml_utils.model.estimator import NetworkModel
 
 ca = certifi.where()
@@ -67,12 +68,62 @@ app.add_middleware(
 
 templates = Jinja2Templates(directory="./templates")
 
+
+def _silence_estimator_verbosity(estimator) -> None:
+    """Recursively turn off `verbose` on an estimator (and each step, if it's
+    a Pipeline), so predict() calls don't spam stdout with sklearn/joblib
+    Parallel progress logs like:
+        [Parallel(n_jobs=1)]: Done 32 out of 32 | elapsed: 0.0s finished
+    """
+    if hasattr(estimator, "verbose"):
+        try:
+            estimator.verbose = 0
+        except Exception:
+            pass
+    # Pipeline objects expose .steps as a list of (name, transformer/estimator)
+    if hasattr(estimator, "steps"):
+        for _, step in estimator.steps:
+            _silence_estimator_verbosity(step)
+    # Some meta-estimators (e.g. GridSearchCV-wrapped, VotingClassifier) expose
+    # .estimator or .estimators_
+    if hasattr(estimator, "estimator"):
+        _silence_estimator_verbosity(estimator.estimator)
+    if hasattr(estimator, "estimators_"):
+        for sub in estimator.estimators_:
+            _silence_estimator_verbosity(sub)
+
+
+def _looks_like_valid_url(url: str) -> bool:
+    """Reject obvious non-URLs (empty strings, page fragments/anchors like
+    '#batch-upload', localhost, missing scheme/host) before running the full
+    feature-extraction pipeline on them. Prevents nonsense input like
+    'http://localhost:8080/#batch-upload' from silently getting a confident
+    'Legitimate'/'Phishing' verdict instead of a clear error.
+    """
+    if not url or not url.strip():
+        return False
+    try:
+        parsed = urlparse(url.strip())
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if not parsed.netloc:
+        return False
+    hostname = (parsed.hostname or "").lower()
+    if hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
+        return False  # a phishing checker has no business "checking" itself
+    return True
+
+
 # Load the model + preprocessor once at startup and cache them in memory,
 # instead of re-reading both pickle files from disk on every /predict call.
 # /train refreshes these in-memory objects after a successful retrain.
 try:
     _preprocessor = load_object("final_model/preprocessor.pkl")
     _model = load_object("final_model/model.pkl")
+    _silence_estimator_verbosity(_preprocessor)
+    _silence_estimator_verbosity(_model)
     network_model: NetworkModel | None = NetworkModel(preprocessor=_preprocessor, model=_model)
 except Exception as e:
     # Don't crash app startup if no model has been trained yet — /predict
@@ -81,8 +132,73 @@ except Exception as e:
     network_model = None
 
 
-@app.get("/", tags=["authentication"])
-async def index() -> RedirectResponse:
+@app.get("/")
+async def index(request: Request) -> _TemplateResponse:
+    return templates.TemplateResponse(request, "index.html", {})
+
+
+@app.post("/predict-url")
+async def predict_url_route(request: Request, url: Annotated[str, Form()]) -> _TemplateResponse:
+    try:
+        if network_model is None:
+            return templates.TemplateResponse(
+                request,
+                "index.html",
+                {"error": "No trained model available yet. Call /train first."},
+            )
+
+        if not _looks_like_valid_url(url):
+            return templates.TemplateResponse(
+                request,
+                "index.html",
+                {
+                    "error": "That doesn't look like a valid http(s) URL. Please check and try again.",
+                    "checked_url": url,
+                },
+            )
+
+        features_df = extract_features(url)
+        prediction = network_model.predict(features_df)[0]
+        # IMPORTANT: the trained model's classes are 0.0 (phishing) and 1.0
+        # (legitimate) — NOT -1/1 as originally assumed. The old check
+        # `"Phishing" if prediction == -1 else "Legitimate"` could never
+        # match -1 (since the model never predicts that value), so it was
+        # silently reporting "Legitimate" on every single prediction
+        # regardless of what the model actually decided. Verify this
+        # against your training data's Result column encoding if unsure —
+        # see the printed model.classes_ in debug_sensitivity.py output.
+        result = "Legitimate" if prediction == 1 else "Phishing"
+
+        # Confidence score, if the underlying estimator supports predict_proba.
+        # Not all models do (e.g. plain SVC without probability=True), so this
+        # degrades gracefully to no confidence shown rather than erroring.
+        confidence = None
+        try:
+            if hasattr(network_model, "predict_proba"):
+                proba = network_model.predict_proba(features_df)[0]
+                confidence = round(float(max(proba)) * 100, 1)
+        except Exception as proba_err:
+            logging.warning(f"predict_proba unavailable for {url}: {proba_err}")
+
+        return templates.TemplateResponse(
+            request,
+            "index.html",
+            {"result": result, "checked_url": url, "confidence": confidence},
+        )
+    except Exception as e:
+        logging.warning(f"predict-url failed for {url}: {e}")
+        return templates.TemplateResponse(
+            request,
+            "index.html",
+            {
+                "error": "Couldn't analyze that URL. Make sure it's reachable and try again.",
+                "checked_url": url,
+            },
+        )
+
+
+@app.get("/docs-redirect")
+async def docs_redirect() -> RedirectResponse:
     return RedirectResponse(url="/docs")
 
 
@@ -101,6 +217,8 @@ async def train_route() -> Response:
         # newly trained artifact without needing an app restart.
         preprocessor = load_object("final_model/preprocessor.pkl")
         model = load_object("final_model/model.pkl")
+        _silence_estimator_verbosity(preprocessor)
+        _silence_estimator_verbosity(model)
         network_model = NetworkModel(preprocessor=preprocessor, model=model)
         return Response("Training is successful")
     except Exception as e:
@@ -111,10 +229,36 @@ async def train_route() -> Response:
 async def predict_route(request: Request, file: Annotated[UploadFile, File()] = ...) -> _TemplateResponse:
     try:
         if network_model is None:
-            raise RuntimeError("No trained model available yet. Call /train first.")
+            return templates.TemplateResponse(
+                request,
+                "index.html",
+                {"error": "No trained model available yet. Call /train first."},
+            )
 
         df = pd.read_csv(file.file)
-        y_pred = network_model.predict(df)
+
+        # Validate columns up front instead of letting a mismatched CSV
+        # (e.g. the wrong file entirely) blow up deep inside sklearn with a
+        # raw stack trace shown to the user. Consistent with the upfront
+        # validation already done on /predict-url.
+        missing_cols = [c for c in FEATURE_COLUMNS if c not in df.columns]
+        if missing_cols:
+            preview = ", ".join(missing_cols[:5])
+            more = f" (+{len(missing_cols) - 5} more)" if len(missing_cols) > 5 else ""
+            return templates.TemplateResponse(
+                request,
+                "index.html",
+                {
+                    "error": (
+                        "That CSV doesn't have the expected feature columns "
+                        f"— missing: {preview}{more}. Make sure you're uploading "
+                        "a file with the phishing-detection feature columns, "
+                        "not an unrelated dataset."
+                    ),
+                },
+            )
+
+        y_pred = network_model.predict(df[FEATURE_COLUMNS])
         df["predicted_column"] = y_pred
 
         Path("prediction_output").mkdir(exist_ok=True)
@@ -125,7 +269,12 @@ async def predict_route(request: Request, file: Annotated[UploadFile, File()] = 
         )
 
     except Exception as e:
-        raise NetworkSecurityException(e, sys)
+        logging.warning(f"predict (CSV) failed: {e}")
+        return templates.TemplateResponse(
+            request,
+            "index.html",
+            {"error": "Couldn't process that CSV. Please check the file and try again."},
+        )
 
 
 if __name__ == "__main__":

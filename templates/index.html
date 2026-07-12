@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Phishing URL Detector</title>
+    <style>
+        body {
+            font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+            background: #0f1115;
+            color: #e8e8e8;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 60px 20px;
+        }
+        h1 { font-size: 1.8rem; margin-bottom: 8px; }
+        p.subtitle { color: #9aa0a6; margin-top: 0; margin-bottom: 32px; }
+        form {
+            display: flex;
+            gap: 10px;
+            width: 100%;
+            max-width: 560px;
+        }
+        input[type=text] {
+            flex: 1;
+            padding: 14px 16px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            background: #1a1d24;
+            color: #fff;
+            font-size: 1rem;
+        }
+        button {
+            padding: 14px 22px;
+            border-radius: 8px;
+            border: none;
+            background: #4f7cff;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+        button:hover { background: #3d67e8; }
+        .result {
+            margin-top: 32px;
+            padding: 20px 28px;
+            border-radius: 10px;
+            max-width: 560px;
+            width: 100%;
+            text-align: center;
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+        .safe { background: #123a24; color: #4ade80; border: 1px solid #1e5a38; }
+        .phishing { background: #3a1212; color: #f87171; border: 1px solid #5a1e1e; }
+        .error { background: #3a2e12; color: #facc15; border: 1px solid #5a4a1e; }
+        .footer-link { margin-top: 40px; }
+        a { color: #9aa0a6; }
+
+        /* --- new: nav bar between single-URL and CSV batch upload --- */
+        .mode-nav {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 28px;
+            background: #1a1d24;
+            border: 1px solid #2a2d34;
+            border-radius: 10px;
+            padding: 4px;
+        }
+        .mode-nav a {
+            padding: 8px 18px;
+            border-radius: 7px;
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #9aa0a6;
+        }
+        .mode-nav a.active {
+            background: #4f7cff;
+            color: #fff;
+        }
+        .batch-panel {
+            margin-top: 40px;
+            width: 100%;
+            max-width: 560px;
+            border: 1px solid #2a2d34;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+        }
+        .batch-panel h2 {
+            font-size: 1rem;
+            margin: 0 0 6px 0;
+        }
+        .batch-panel p {
+            font-size: 0.85rem;
+            color: #9aa0a6;
+            margin: 0 0 14px 0;
+        }
+        .batch-panel form {
+            justify-content: center;
+        }
+        input[type=file] {
+            color: #9aa0a6;
+            font-size: 0.9rem;
+        }
+
+        /* --- new: example links + loading state --- */
+        .examples {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-top: 12px;
+            font-size: 0.82rem;
+            color: #6b7280;
+            flex-wrap: wrap;
+            max-width: 560px;
+            justify-content: center;
+        }
+        .examples .example-link {
+            color: #6d8cff;
+            text-decoration: none;
+            padding: 3px 9px;
+            border: 1px solid #2a2d34;
+            border-radius: 6px;
+        }
+        .examples .example-link:hover {
+            background: #1a1d24;
+            color: #9db2ff;
+        }
+        button[disabled] {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255,255,255,0.4);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <h1>🔎 Phishing URL Detector</h1>
+    <p class="subtitle">Paste a URL below and I'll tell you if it looks phishy.</p>
+
+    <div class="mode-nav">
+        <a href="/" class="active">Single URL</a>
+        <a href="#batch-upload">Batch (CSV)</a>
+    </div>
+
+    <form action="/predict-url" method="post" id="url-form">
+        <input type="text" name="url" id="url-input" placeholder="https://example.com" value="{{ checked_url or '' }}" required autofocus>
+        <button type="submit" id="check-btn">Check URL</button>
+    </form>
+
+    <div class="examples">
+        <span>Try:</span>
+        <a href="#" class="example-link" data-url="https://github.com">github.com</a>
+        <a href="#" class="example-link" data-url="https://www.google.com">google.com</a>
+        <a href="#" class="example-link" data-url="http://paypal-secure-verify.tk">paypal-secure-verify.tk</a>
+    </div>
+
+    {% if result %}
+    <div class="result {{ 'phishing' if result == 'Phishing' else 'safe' }}">
+        {% if result == 'Phishing' %}
+            ⚠️ This looks like a <strong>Phishing</strong> site.
+        {% else %}
+            ✅ This looks <strong>Legitimate</strong>.
+        {% endif %}
+        {% if confidence %}
+        <div style="font-size: 0.85rem; font-weight: 400; margin-top: 4px; opacity: 0.75;">
+            Confidence: {{ confidence }}%
+        </div>
+        {% endif %}
+        <div style="font-size: 0.9rem; font-weight: 400; margin-top: 6px; opacity: 0.8;">
+            Checked: {{ checked_url }}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if error %}
+    <div class="result error">
+        {{ error }}
+        {% if checked_url %}
+        <div style="font-size: 0.9rem; font-weight: 400; margin-top: 6px; opacity: 0.8;">
+            URL: {{ checked_url }}
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- new: CSV batch upload panel, posts to the existing /predict route -->
+    <div class="batch-panel" id="batch-upload">
+        <h2>Batch check via CSV</h2>
+        <p>Upload a CSV of pre-extracted feature rows to get predictions for all of them at once.</p>
+        <form action="/predict" method="post" enctype="multipart/form-data">
+            <input type="file" name="file" accept=".csv" required>
+            <button type="submit">Upload &amp; Predict</button>
+        </form>
+    </div>
+
+    <div class="footer-link">
+        <a href="/docs">API docs</a> · <a href="/health">Health</a>
+    </div>
+
+    <script>
+        // Disable + spin the button on submit so slow extractors (WHOIS,
+        // live page fetch) give visible feedback instead of looking frozen.
+        document.getElementById('url-form').addEventListener('submit', function () {
+            var btn = document.getElementById('check-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span>Checking...';
+        });
+
+        // Example links fill the input rather than navigating away, so the
+        // '#batch-upload'-in-the-input mixup from before can't happen again.
+        document.querySelectorAll('.example-link').forEach(function (link) {
+            link.addEventListener('click', function (e) {
+                e.preventDefault();
+                document.getElementById('url-input').value = this.dataset.url;
+            });
+        });
+    </script>
+</body>
+</html>

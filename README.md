@@ -31,7 +31,8 @@
 9. [Quick Start](#-quick-start)
 10. [Project Structure](#-project-structure)
 11. [Engineering Challenges Solved](#-engineering-challenges-solved)
-12. [License](#license)
+12. [Known Limitations](#-known-limitations)
+13. [License](#license)
 
 ---
 
@@ -39,7 +40,7 @@
 
 This project builds a maintainable, production-style pipeline for detecting malicious/phishing websites from their URL characteristics. Rather than a one-off notebook, it's structured as independent, reusable components — ingestion, validation, transformation, and training — with experiment tracking, schema validation, and statistical drift detection built in throughout.
 
-The trained model is served through a FastAPI application supporting both on-demand retraining (`/train`) and real-time inference (`/predict`), containerized with Docker, and deployed to **two independent cloud environments**: a manually-configured AWS stack (IAM → S3 → ECR → EC2) and an automated, GitHub-integrated deployment on Render.
+The trained model is served through a FastAPI application supporting both on-demand retraining (`/train`) and real-time inference — either as a **batch CSV upload** (`/predict`) or a **single live URL** (`/predict-url`, which extracts all 30 model features directly from the URL in real time: SSL certificate state, WHOIS/domain age, DNS resolution, and live HTML parsing). The app is containerized with Docker and deployed to **two independent cloud environments**: a manually-configured AWS stack (IAM → S3 → ECR → EC2) and an automated, GitHub-integrated deployment on Render.
 
 <div align="center">
 
@@ -56,7 +57,7 @@ The trained model is served through a FastAPI application supporting both on-dem
 | **Render** *(primary)* | **[phishing-url-detection-mlops.onrender.com/docs](https://phishing-url-detection-mlops.onrender.com/docs)** | Stable, always-available. Free tier spins down after inactivity — first request may take 30–60s to wake. |
 | **AWS EC2** | Deployed manually via Docker on a `t3.micro` instance | Demonstrates full manual cloud deployment ownership. |
 
-> 💡 **Try it yourself:** open the live docs above, expand `POST /predict`, upload `valid_data/test.csv`, and hit Execute. You'll get back an HTML table with a `predicted_column` — `1.0` = legitimate, `0.0` = phishing.
+> 💡 **Try it yourself:** open the live docs above, expand `POST /predict`, upload `valid_data/test.csv`, and hit Execute. You'll get back an HTML table with a `predicted_column` — `1.0` = legitimate, `0.0` = phishing. Or use the web UI at `/` to check a single URL directly.
 
 ---
 
@@ -68,7 +69,8 @@ The trained model is served through a FastAPI application supporting both on-dem
 | 📈 **Data drift detection** | Schema validation + Kolmogorov–Smirnov statistical test catches distribution shifts before they reach the model |
 | 🧪 **Experiment tracking** | Every training run — hyperparameters, F1, precision, recall — logged to MLflow via DagsHub |
 | ☁️ **Automated artifact sync** | Trained models, preprocessors, and reports pushed to AWS S3 after every run |
-| 🔌 **REST API** | FastAPI service with `/train` and `/predict`, plus interactive Swagger docs out of the box |
+| 🔌 **REST API** | FastAPI service with `/train`, `/predict` (CSV batch), and `/predict-url` (single live URL), plus interactive Swagger docs out of the box |
+| 🌐 **Live URL inference** | Paste any URL into the web UI and get an instant phishing/legitimate verdict with a confidence score, computed by extracting all 30 model features live (SSL, WHOIS, DNS, HTML) |
 | 🐳 **Dual cloud deployment** | Docker image deployed manually to AWS EC2 via ECR *and* automatically to Render via GitHub integration |
 
 ---
@@ -106,15 +108,18 @@ The model is trained on **11,055 URL records**, each described by 30 lexical, do
 
 | Feature | What it captures |
 | :--- | :--- |
+| `SSLfinal_State` | Validity/trustworthiness of the SSL certificate — the single most predictive feature in the trained model |
+| `URL_of_Anchor` | What proportion of a page's links are empty, broken, or point off-domain — the second most predictive feature; computed live via HTML parsing for real-time URL checks, not defaulted |
 | `having_IP_Address` | Whether the URL uses a raw IP instead of a domain name |
 | `URL_Length` | Overall URL length — longer URLs are more often suspicious |
 | `Shortining_Service` | Whether a URL shortener (e.g. bit.ly) was used |
 | `having_At_Symbol` | Presence of "@", which can mask the real destination domain |
-| `SSLfinal_State` | Validity/trustworthiness of the SSL certificate |
 | `Domain_registeration_length` | How long the domain has been registered |
 | `age_of_domain` | How long the domain has existed |
 | `web_traffic` | Site traffic rank as a proxy for legitimacy |
 | `Google_Index` | Whether the page is indexed by Google |
+
+> Not every feature can be computed live without a paid data source — see [Known Limitations](#-known-limitations) for the two that still fall back to a neutral default.
 
 ---
 
@@ -154,7 +159,7 @@ Missing values imputed with `KNNImputer`; features passed through a preprocessin
 </div>
 
 ### 4️⃣ Model Training
-Multiple candidate models trained via `GridSearchCV`. Every run — params, F1, precision, recall — logged to MLflow (tracked live on DagsHub). Best model + preprocessor persisted.
+Five candidate classifiers (Random Forest, Gradient Boosting, AdaBoost, Logistic Regression, Decision Tree) trained via `GridSearchCV` and ranked by **F1 score** — the appropriate metric for this binary classification task. Every run — params, F1, precision, recall — logged to MLflow (tracked live on DagsHub). Best model + preprocessor persisted.
 
 <div align="center">
 
@@ -166,7 +171,7 @@ Multiple candidate models trained via `GridSearchCV`. Every run — params, F1, 
 Datasets, validation reports, and trained artifacts synced automatically to an S3 bucket after every run.
 
 ### 6️⃣ Serving
-The best model is loaded by FastAPI and exposed via `/predict` for real-time inference and `/train` for on-demand retraining.
+The best model is loaded by FastAPI and exposed via `/predict` (CSV batch) and `/predict-url` (single live URL) for inference, and `/train` for on-demand retraining.
 
 ---
 
@@ -176,15 +181,19 @@ Metrics from the most recent training run — tracked live on **[DagsHub/MLflow]
 
 <div align="center">
 
+![DagsHub MLflow Experiments](images/Screenshot%202026-07-12%20110941.png)
+
 | Metric | Train | Test |
 | :---: | :---: | :---: |
-| **F1 Score** | 0.991 | 0.975 |
-| **Precision** | 0.990 | 0.970 |
-| **Recall** | 0.993 | 0.980 |
+| **F1 Score** | 0.991 | 0.971 |
+| **Precision** | 0.988 | 0.967 |
+| **Recall** | 0.994 | 0.975 |
 
 </div>
 
 The small train/test gap indicates the model generalizes well without significant overfitting.
+
+> Each training run logs two MLflow experiments — one for train metrics, one for test — visible under the **Experiments** tab on DagsHub. Model selection was corrected from `r2_score` (a regression metric, not meaningful for classification) to `f1_score`; if you retrain after pulling this fix, confirm `DAGSHUB_USER_TOKEN` is set so the corrected run gets logged and these numbers stay current.
 
 ---
 
@@ -244,7 +253,7 @@ python test.py
 # 6. Start the API
 uvicorn app:app --host 0.0.0.0 --port 8080
 ```
-Interactive docs available at `http://localhost:8080/docs`.
+Interactive docs available at `http://localhost:8080/docs`. The single-URL checker UI is available at `http://localhost:8080/`.
 
 **Or run it with Docker:**
 ```bash
@@ -269,10 +278,14 @@ docker run -d -p 8080:8080 --env-file .env --name phishing-app phishing-mlops-re
 │   ├── cloud/                       # S3 sync utilities
 │   ├── exception/                   # Custom exception handling
 │   ├── logging/                     # Logging setup
-│   └── utils/                       # Shared helper functions
+│   └── utils/
+│       └── ml_utils/
+│           ├── feature_extraction.py  # Live-URL feature extraction (SSL, WHOIS, DNS, HTML)
+│           ├── evaluation/              # Model scoring (F1-based selection)
+│           └── model/                   # NetworkModel wrapper (predict / predict_proba)
 ├── data_schema/schema.yaml       # Schema used for data validation
 ├── final_model/                  # Latest trained model + preprocessor
-├── templates/                    # Jinja2 templates for prediction output
+├── templates/                    # Jinja2 templates (single-URL UI + batch-result table)
 ├── valid_data/                   # Sample data for testing /predict
 ├── app.py                        # FastAPI entry point
 ├── push_data.py                  # MongoDB data loader
@@ -286,6 +299,42 @@ docker run -d -p 8080:8080 --env-file .env --name phishing-app phishing-mlops-re
 ## 🔧 Engineering Challenges Solved
 
 Building and deploying this pipeline surfaced real-world issues that had to be diagnosed and fixed — the kind of debugging that doesn't show up in a tutorial, but does in production:
+
+<details>
+<summary><b>Critical: inference response silently ignored the model's actual prediction</b></summary>
+<br>
+The single-URL prediction route determined the displayed label with <code>"Phishing" if prediction == -1 else "Legitimate"</code> — but the trained classifier's actual output classes were <code>0.0</code> and <code>1.0</code>, never <code>-1</code>. This meant the comparison could never be true, so the app reported <b>"Legitimate" on every single prediction</b>, regardless of what the model had actually decided — while the confidence score displayed alongside it was, confusingly, still accurate. Found by running a per-feature sensitivity analysis against a known-suspicious test URL: even with 8 of the model's most important features (including the single highest-weighted one) set to their most suspicious values, the UI still reported "Legitimate." Root-caused to the label mismatch and fixed by checking against the model's actual class encoding. A reminder that a plausible-looking green checkmark is not the same as a verified one.
+</details>
+
+<details>
+<summary><b>Model selection used a regression metric on a classification task</b></summary>
+<br>
+<code>evaluate_models()</code> ranked candidate classifiers using <code>r2_score</code>, a metric defined for continuous regression targets, not discrete class labels. It happened to run without error, which is what let it go unnoticed — but it wasn't measuring classification quality at all. Replaced with <code>f1_score</code>, added matching <code>scoring="f1"</code> to the internal <code>GridSearchCV</code> hyperparameter search so both stages of model selection optimize the same objective, and retrained the deployed model under the corrected metric.
+</details>
+
+<details>
+<summary><b>Live inference was silently discarding the model's most important feature</b></summary>
+<br>
+Several engineered features (<code>URL_of_Anchor</code>, <code>Links_in_tags</code>, <code>web_traffic</code>, <code>Page_Rank</code>) were hardcoded to a neutral default in the live single-URL inference path, since their original data sources (Alexa rankings, paid PageRank APIs) are discontinued or paywalled. Running a feature-importance analysis on the trained model showed <code>URL_of_Anchor</code> alone accounts for <b>22.8% of total model importance</b> — the second-highest of all 30 features — meaning nearly a quarter of the model's decision-making was being thrown away on every live prediction. Implemented real-time HTML anchor/link-tag parsing to compute <code>URL_of_Anchor</code> and <code>Links_in_tags</code> from the fetched page instead of defaulting them, recovering roughly 27% of total model importance for live predictions. <code>web_traffic</code> and <code>Page_Rank</code> remain neutral-defaulted — see <a href="#-known-limitations">Known Limitations</a>.
+</details>
+
+<details>
+<summary><b>Unbounded WHOIS lookups could hang inference indefinitely</b></summary>
+<br>
+<code>whois.whois()</code> has no built-in timeout, so a slow or unresponsive WHOIS server could block a single-URL prediction request forever. It was also being called twice per request — once each for domain age and registration length — doubling the network round-trips for no reason. Wrapped in a thread-based hard timeout and deduplicated into a single cached lookup shared by both features.
+</details>
+
+<details>
+<summary><b>Mismatched CSV uploads returned raw internal stack traces</b></summary>
+<br>
+Uploading a CSV without the expected feature columns (e.g. the wrong file entirely) propagated all the way into a raw scikit-learn <code>ValueError</code> and a 500 response exposing internal file paths and stack frames to the client. Added upfront schema validation against the expected feature columns, returning a clear, actionable error message instead.
+</details>
+
+<details>
+<summary><b>Verbose ML library output leaking into production logs</b></summary>
+<br>
+The trained model (and/or its preprocessing pipeline) had <code>verbose</code> logging enabled from an earlier interactive session, which got serialized into the pickled artifact. Every live prediction was therefore printing scikit-learn/joblib progress output (e.g. <code>[Parallel(n_jobs=1)]: Done 32 out of 32...</code>) straight to the server logs. Added a startup routine that recursively silences <code>verbose</code> on the loaded model and preprocessor (including nested pipeline steps), applied both at initial load and after every retrain.
+</details>
 
 <details>
 <summary><b>Starlette API breaking change</b></summary>
@@ -328,6 +377,13 @@ DagsHub's default <code>dagshub.init()</code> call triggers an interactive, brow
 <br>
 Docker's login token for AWS ECR expires periodically, requiring re-authentication (<code>aws ecr get-login-password</code>) before each push or pull — easy to miss when returning to a deployment after a break.
 </details>
+
+---
+
+## ⚠️ Known Limitations
+
+- **`web_traffic` and `Page_Rank`** remain hardcoded to a neutral default in live single-URL inference. Their original data sources (Alexa Rank, a paid PageRank API) are discontinued or require a paid subscription. Together they account for a modest ~9% of total model feature importance — a deliberate, documented tradeoff rather than an oversight. `URL_of_Anchor` and `Links_in_tags`, which together account for far more importance, **are** computed live from the page's actual HTML (see Engineering Challenges above).
+- **`Abnormal_URL`** is defined, per the original dataset, as whether the hostname appears within the full URL — which is true by construction for any URL parsed with `urlparse`, making it a low-signal feature in this implementation regardless of the input. Retained for schema/feature-count compatibility with the trained model rather than reimplemented, since changing it would require retraining against a differently-defined feature.
 
 ---
 
