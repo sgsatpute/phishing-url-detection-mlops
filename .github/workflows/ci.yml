@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run test suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          # tests/conftest.py already provides safe defaults for these via
+          # os.environ.setdefault, so these are only a fallback — but set
+          # explicitly here too so CI behavior doesn't silently depend on
+          # that implementation detail if conftest.py ever changes.
+          MONGO_DB_USERNAME: ci_test_user
+          MONGO_DB_PASSWORD: ci_test_password
+        run: pytest tests/ -v
+
+  docker-build:
+    name: Validate Docker build
+    runs-on: ubuntu-latest
+    # Independent of the test job — a broken Dockerfile shouldn't be masked
+    # by test results, and a passing test suite shouldn't hide a broken
+    # container build. Both must succeed for CI to pass.
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image (no push)
+        run: docker build -t phishing-mlops-ci-check .

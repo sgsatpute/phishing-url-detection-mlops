@@ -11,6 +11,7 @@
 [![MLflow](https://img.shields.io/badge/MLflow-DagsHub-0194E2?logo=mlflow&logoColor=white)](https://dagshub.com/sgsatpute/phishing-url-detection-mlops.mlflow)
 [![AWS](https://img.shields.io/badge/AWS-EC2%20%7C%20S3%20%7C%20ECR-FF9900?logo=amazonaws&logoColor=white)](https://aws.amazon.com/)
 [![Render](https://img.shields.io/badge/Deployed%20on-Render-46E3B7?logo=render&logoColor=white)](https://phishing-url-detection-mlops.onrender.com/docs)
+[![CI](https://github.com/sgsatpute/phishing-url-detection-mlops/actions/workflows/ci.yml/badge.svg)](https://github.com/sgsatpute/phishing-url-detection-mlops/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-lightgrey)](#license)
 
 **[🔗 Live API Docs](https://phishing-url-detection-mlops.onrender.com/docs)** · **[📊 MLflow Experiments](https://dagshub.com/sgsatpute/phishing-url-detection-mlops.mlflow)** · **[📁 Repository](https://github.com/sgsatpute/phishing-url-detection-mlops)**
@@ -71,6 +72,7 @@ The trained model is served through a FastAPI application supporting both on-dem
 | ☁️ **Automated artifact sync** | Trained models, preprocessors, and reports pushed to AWS S3 after every run |
 | 🔌 **REST API** | FastAPI service with `/train`, `/predict` (CSV batch), and `/predict-url` (single live URL), plus interactive Swagger docs out of the box |
 | 🌐 **Live URL inference** | Paste any URL into the web UI and get an instant phishing/legitimate verdict with a confidence score, computed by extracting all 30 model features live (SSL, WHOIS, DNS, HTML) |
+| ✅ **Continuous Integration** | GitHub Actions runs the automated test suite and validates the Docker build on every push and pull request |
 | 🐳 **Dual cloud deployment** | Docker image deployed manually to AWS EC2 via ECR *and* automatically to Render via GitHub integration |
 
 ---
