@@ -60,6 +60,12 @@ The trained model is served through a FastAPI application supporting both on-dem
 
 > 💡 **Try it yourself:** open the live docs above, expand `POST /predict`, upload `valid_data/test.csv`, and hit Execute. You'll get back an HTML table with a `predicted_column` — `1.0` = legitimate, `0.0` = phishing. Or use the web UI at `/` to check a single URL directly.
 
+<div align="center">
+
+![Single-URL Checker UI](images/demo_view_render.png)
+
+</div>
+
 ---
 
 ## ✨ Features
