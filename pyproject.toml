@@ -19,3 +19,7 @@ dependencies = [
     "setuptools>=80.9.0",
     "uvicorn>=0.34.3",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

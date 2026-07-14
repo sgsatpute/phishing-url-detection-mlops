@@ -3,9 +3,6 @@ from pathlib import Path
 
 from network_security.constant import training_pipeline
 
-print(training_pipeline.PIPELINE_NAME)
-print(training_pipeline.ARTIFACT_DIR)
-
 
 class TrainingPipelineConfig:
     def __init__(self, timestamp: datetime = None) -> None:

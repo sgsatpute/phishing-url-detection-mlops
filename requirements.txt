@@ -1,9 +1,8 @@
 python-dotenv
 pandas
 numpy
-pymongo
 certifi
-pymongo[srv]==3.12
+pymongo[srv]>=4.6,<5
 scikit-learn
 pyaml
 mlflow
@@ -13,6 +12,8 @@ uvicorn
 python-multipart
 requests
 python-whois
+pytest
+httpx
 
 
 # -e .

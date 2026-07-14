@@ -7,7 +7,7 @@ from urllib.parse import quote_plus, urlparse
 import certifi
 import pandas as pd
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
@@ -45,6 +45,24 @@ if not _raw_username or not _raw_password:
     )
 username = quote_plus(_raw_username)
 password = quote_plus(_raw_password)
+
+# /train runs the full pipeline (ingestion, validation, transformation,
+# GridSearchCV across 5 models) and was previously unauthenticated — any
+# unauthenticated GET request could trigger it, making it a trivial
+# resource-exhaustion vector against a publicly deployed instance. Require
+# a shared secret via the X-Train-Api-Key header. If TRAIN_API_KEY isn't
+# set, /train is disabled entirely rather than silently left open.
+TRAIN_API_KEY = os.getenv("TRAIN_API_KEY")
+
+
+def _verify_train_api_key(x_train_api_key: str | None = Header(default=None)) -> None:
+    if not TRAIN_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="TRAIN_API_KEY is not configured on the server; /train is disabled.",
+        )
+    if not x_train_api_key or x_train_api_key != TRAIN_API_KEY:
+        raise HTTPException(status_code=401, detail="Missing or invalid X-Train-Api-Key header.")
 
 mongo_db_url: str = f"mongodb+srv://{username}:{password}@cluster0.lbvk3s8.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 
@@ -132,8 +150,19 @@ except Exception as e:
     network_model = None
 
 
-@app.get("/")
-async def index(request: Request) -> _TemplateResponse:
+def _label_from_prediction(prediction: float) -> str:
+    """Map the model's raw class output to a display label.
+
+    IMPORTANT: the trained model's classes are 0.0 (phishing) and 1.0
+    (legitimate) — confirmed against data_transformation.py, which replaces
+    the raw dataset's Result values of -1 (phishing) with 0 before training.
+    A previous version of this check compared against -1 directly, which
+    could never match and silently reported "Legitimate" on every single
+    prediction. Extracted into its own function (rather than left inline in
+    the route) specifically so it can be unit tested in isolation — see
+    tests/test_label_mapping.py.
+    """
+    return "Legitimate" if prediction == 1 else "Phishing"
     return templates.TemplateResponse(request, "index.html", {})
 
 
@@ -159,15 +188,7 @@ async def predict_url_route(request: Request, url: Annotated[str, Form()]) -> _T
 
         features_df = extract_features(url)
         prediction = network_model.predict(features_df)[0]
-        # IMPORTANT: the trained model's classes are 0.0 (phishing) and 1.0
-        # (legitimate) — NOT -1/1 as originally assumed. The old check
-        # `"Phishing" if prediction == -1 else "Legitimate"` could never
-        # match -1 (since the model never predicts that value), so it was
-        # silently reporting "Legitimate" on every single prediction
-        # regardless of what the model actually decided. Verify this
-        # against your training data's Result column encoding if unsure —
-        # see the printed model.classes_ in debug_sensitivity.py output.
-        result = "Legitimate" if prediction == 1 else "Phishing"
+        result = _label_from_prediction(prediction)
 
         # Confidence score, if the underlying estimator supports predict_proba.
         # Not all models do (e.g. plain SVC without probability=True), so this
@@ -204,10 +225,23 @@ async def docs_redirect() -> RedirectResponse:
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "model_loaded": network_model is not None}
+    mongo_ok = True
+    mongo_error = None
+    try:
+        client.admin.command("ping")
+    except Exception as e:
+        mongo_ok = False
+        mongo_error = str(e)
+
+    return {
+        "status": "ok" if (network_model is not None and mongo_ok) else "degraded",
+        "model_loaded": network_model is not None,
+        "mongo_connected": mongo_ok,
+        **({"mongo_error": mongo_error} if mongo_error else {}),
+    }
 
 
-@app.get("/train")
+@app.get("/train", dependencies=[Depends(_verify_train_api_key)])
 async def train_route() -> Response:
     global network_model
     try:
