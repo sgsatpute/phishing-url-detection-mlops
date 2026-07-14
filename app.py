@@ -163,6 +163,11 @@ def _label_from_prediction(prediction: float) -> str:
     tests/test_label_mapping.py.
     """
     return "Legitimate" if prediction == 1 else "Phishing"
+
+
+@app.get("/")
+async def index(request: Request) -> _TemplateResponse:
+    return templates.TemplateResponse(request, "index.html", {})
     return templates.TemplateResponse(request, "index.html", {})
 
 
